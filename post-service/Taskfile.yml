@@ -1,0 +1,18 @@
+# https://taskfile.dev
+# TODO: Linter
+
+version: '3'
+
+tasks:
+  generate:
+    aliases: [migrate]
+    desc: "Generate migrations for the database"
+    dotenv: [".env"]
+    cmds:
+      - go run cmd/migrator/main.go --migrations-path "./migrations"
+
+  # rollback:
+  #   desc: "Rollback the last migration"
+  #   dotenv: [".env"]
+  #   cmds:
+  #     - migrate -path ./migrations -database "$DATABASE_URL" down 1

@@ -1,0 +1,11 @@
+env: "local" # local, dev, prod
+
+http_server:
+  address: "localhost:3001"
+  timeout: 4s
+  idle_timeout: 60s
+
+kafka:
+  brokers: ["localhost:9092"]
+  topic: "posts"
+  group_id: "notification-service"
