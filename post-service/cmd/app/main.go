@@ -27,10 +27,7 @@ func main() {
 	log := logger.SetupLogger(cfg.Env)
 	log.Info("starting the project...", slog.String("env", cfg.Env))
 
-	kafkaBrokers := []string{"localhost:9092"}
-	topic := "posts.raw"
-
-	producer, err := repository.NewKafkaProducer(kafkaBrokers, topic)
+	producer, err := repository.NewKafkaProducer(cfg.Brokers, cfg.Topic)
 	if err != nil {
 		log.Error("failed to create Kafka producer:", slog.Any("err", err))
 	}
