@@ -5,7 +5,6 @@ services:
     ports:
       - "9092:9092"
     environment:
-      # Режим без ZooKeeper
       - KAFKA_CFG_PROCESS_ROLES=broker,controller
       - KAFKA_CFG_NODE_ID=1
       - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
@@ -16,5 +15,16 @@ services:
     volumes:
       - kafka_data:/bitnami/kafka
 
+  # postgres:
+  #   image: postgres:16
+  #   container_name: postgres
+  #   ports:
+  #     - "5432:5432"
+  #   env_file:
+  #     - ./post-service/.env   # путь к твоему .env файлу
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
 volumes:
   kafka_data:
+  # postgres_data:

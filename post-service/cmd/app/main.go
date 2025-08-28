@@ -10,16 +10,18 @@ import (
 	"syscall"
 	"time"
 
+	repository "post-service/internal/repository/kafka"
+	"post-service/internal/repository/postgres"
 	route "post-service/internal/router"
 
 	"post-service/internal/config"
 	"post-service/internal/lib/logger"
-	"post-service/internal/repository"
 	"post-service/internal/usecase"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
-
 	// Configurate system
 	cfg := config.MustLoad()
 
@@ -27,12 +29,22 @@ func main() {
 	log := logger.SetupLogger(cfg.Env)
 	log.Info("starting the project...", slog.String("env", cfg.Env))
 
+	// Подключаемся к БД
+	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		log.Error("failed to connect to db:", slog.Any("err", err))
+	}
+	defer pool.Close() // закрываем при завершении приложения
+
+	// оборачиваем pool в репозиторий (если утка крякает как утка, то вероятно это и есть утка)
+	postRepo := postgres.NewPostgresPostRepository(pool)
+
 	producer, err := repository.NewKafkaProducer(cfg.Brokers, cfg.Topic)
 	if err != nil {
-		log.Error("failed to create Kafka producer:", slog.Any("err", err))
+		log.Error("failed to create kafka producer:", slog.Any("err", err))
 	}
 
-	postUC := usecase.NewPostUsecase(producer)
+	postUC := usecase.NewPostUsecase(postRepo, producer)
 
 	// Init router
 	router := route.New(log, postUC)

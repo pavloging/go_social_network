@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
@@ -8,10 +9,10 @@ import (
 )
 
 type Config struct {
-	Env string `yaml:"env" env-default:"local"`
-	// DatabaseURL string `env:"DATABASE_URL,required"`
-	HTTPServer `yaml:"http_server"`
-	Kafka      `yaml:"kafka"`
+	Env         string `yaml:"env" env-default:"local"`
+	DatabaseURL string `env:"DATABASE_URL,required"`
+	HTTPServer  `yaml:"http_server"`
+	Kafka       `yaml:"kafka"`
 }
 
 type HTTPServer struct {
@@ -39,9 +40,9 @@ func MustLoad() *Config {
 		panic("cannot read config " + err.Error())
 	}
 
-	// if cfg.DatabaseURL = os.Getenv("DATABASE_URL"); cfg.DatabaseURL == "" {
-	// 	panic("error loading DATABASE_URL from environment, please set it in .env file")
-	// }
+	if cfg.DatabaseURL = os.Getenv("DATABASE_URL"); cfg.DatabaseURL == "" {
+		panic("error loading DATABASE_URL from environment, please set it in .env file")
+	}
 
 	return &cfg
 }

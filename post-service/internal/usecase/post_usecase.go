@@ -1,20 +1,22 @@
-// internal/usecase/post_usecase.go
 package usecase
 
 import (
 	"post-service/internal/domain"
-	"post-service/internal/repository"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 type PostUsecase struct {
-	Producer *repository.KafkaProducer
+	repo     domain.PostRepository
+	producer domain.EventProducer
 }
 
-func NewPostUsecase(producer *repository.KafkaProducer) *PostUsecase {
-	return &PostUsecase{Producer: producer}
+func NewPostUsecase(poolRepo domain.PostRepository, producer domain.EventProducer) *PostUsecase {
+	return &PostUsecase{
+		repo:     poolRepo,
+		producer: producer,
+	}
 }
 
 func (u *PostUsecase) CreatePost(title, author, content string, tags []string) (*domain.Post, error) {
@@ -27,9 +29,16 @@ func (u *PostUsecase) CreatePost(title, author, content string, tags []string) (
 		CreatedAt: time.Now(),
 	}
 
-	if err := u.Producer.Publish(post); err != nil {
+	// 1. Сохраняем в БД
+	if err := u.repo.Save(post); err != nil {
 		return nil, err
 	}
 
+	// 2. Публикуем событие в Kafka
+	if err := u.producer.Publish(post); err != nil {
+		return nil, err
+	}
+
+	// 3. Возращаем пост
 	return post, nil
 }
