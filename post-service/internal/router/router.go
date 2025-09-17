@@ -8,6 +8,8 @@ import (
 
 	httpDelivery "post-service/internal/delivery/http"
 	"post-service/internal/usecase"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // New инициализирует chi.Router
@@ -25,6 +27,7 @@ func New(
 	r.Use(middleware.URLFormat)
 
 	// Handlers
+	r.Handle("/metrics", promhttp.Handler())
 	postHandler := httpDelivery.NewPostHandler(log, postUC)
 	// commentHandler := httpDelivery.NewCommentHandler(log, commentUC)
 

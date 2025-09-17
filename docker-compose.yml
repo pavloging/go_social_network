@@ -14,6 +14,27 @@ services:
       - ALLOW_PLAINTEXT_LISTENER=yes
     volumes:
       - kafka_data:/bitnami/kafka
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/configs:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - monitoring
 
   # postgres:
   #   image: postgres:16
@@ -24,6 +45,10 @@ services:
   #     - ./post-service/.env   # путь к твоему .env файлу
   #   volumes:
   #     - postgres_data:/var/lib/postgresql/data
+
+networks:
+  monitoring:
+    driver: bridge
 
 volumes:
   kafka_data:

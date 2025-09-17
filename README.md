@@ -5,7 +5,7 @@
 2. В post-service добавьте .env по примеру .example.env.
 3. В корне запустите docker-compose `docker-compose up -d`.
 4. Запустите post-service и notification-service через `go run путь`.
-5. Отправьте POST-запрос по адресу http://localhost:3000/posts, пример запроса.
+5. Отправьте POST-запрос по адресу http://localhost:8000/posts, пример запроса.
 ```json
 	{
 		"title": "Hi",

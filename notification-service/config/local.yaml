@@ -1,7 +1,7 @@
 env: "local" # local, dev, prod
 
 http_server:
-  address: "localhost:3001"
+  address: "localhost:8001"
   timeout: 4s
   idle_timeout: 60s
 
