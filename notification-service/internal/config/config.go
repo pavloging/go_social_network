@@ -24,7 +24,7 @@ type Kafka struct {
 	GroupID string   `yaml:"group_id" env-default:"notification-service"`
 }
 
-const configPath = "./config/local.yaml"
+const configPath = "./config/prod.yaml"
 
 func MustLoad() *Config {
 	var cfg Config

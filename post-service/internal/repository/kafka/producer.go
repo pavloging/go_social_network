@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 
 	"post-service/internal/domain"
 
@@ -28,7 +30,11 @@ func NewKafkaProducer(brokers []string, topic string) (*KafkaProducer, error) {
 	}, nil
 }
 
-func (k *KafkaProducer) Publish(post *domain.Post) error {
+func (k *KafkaProducer) Publish(ctx context.Context, post *domain.Post) error {
+	if k == nil || k.Producer == nil {
+		return errors.New("kafka producer not initialized")
+	}
+
 	msgBytes, err := json.Marshal(post)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 
 	repository "post-service/internal/repository/kafka"
 	"post-service/internal/repository/postgres"
+	"post-service/internal/repository/redis"
 	route "post-service/internal/router"
 
 	"post-service/internal/config"
@@ -22,6 +23,8 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
+
 	// Configurate system
 	cfg := config.MustLoad()
 
@@ -36,18 +39,29 @@ func main() {
 	}
 	defer pool.Close() // закрываем при завершении приложения
 
-	// оборачиваем pool в репозиторий (если утка крякает как утка, то вероятно это и есть утка)
-	postRepo := postgres.NewPostgresPostRepository(pool)
+	// Репозиторий для Postgres
+	postRepo := postgres.NewPostgresPostRepository(pool) // Сущность для работы с posts
 
-	producer, err := repository.NewKafkaProducer(cfg.Brokers, cfg.Topic)
-	if err != nil {
-		log.Error("failed to create kafka producer:", slog.Any("err", err))
+	// Подключаем Redis (cache)
+	cache := redis.NewRedisCache(cfg.Redis.Addr, cfg.Redis.DB)
+
+	var producer *repository.KafkaProducer
+	for i := 0; i < 10; i++ {
+		producer, err = repository.NewKafkaProducer(cfg.Brokers, cfg.Topic)
+		if err == nil {
+			break
+		}
+		log.Warn("Kafka not ready, retrying in 3s...", slog.Any("err", err))
+		time.Sleep(3 * time.Second)
+	}
+	if producer == nil {
+		log.Error("cannot connect to Kafka after retries", slog.Any("err", err))
 	}
 
-	postUC := usecase.NewPostUsecase(postRepo, producer)
+	postUC := usecase.NewPostUsecase(postRepo, producer, cache) // Бизнес-логика для posts
 
-	// Init router
-	router := route.New(log, postUC)
+	// Передаем ctx в обработчики
+	router := route.New(ctx, log, postUC)
 
 	// Settings and started server + Grasful shortdown
 	srv := &http.Server{
@@ -83,6 +97,4 @@ func main() {
 	}
 
 	log.Info("server stopped gracefully")
-
-	// http.HandleFunc("/create-post", handler.CreatePost)
 }

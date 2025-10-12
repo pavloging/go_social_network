@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
-	"github.com/joho/godotenv"
+	// "github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -13,6 +13,7 @@ type Config struct {
 	DatabaseURL string `env:"DATABASE_URL,required"`
 	HTTPServer  `yaml:"http_server"`
 	Kafka       `yaml:"kafka"`
+	Redis       `yaml:"redis"`
 }
 
 type HTTPServer struct {
@@ -27,13 +28,18 @@ type Kafka struct {
 	GroupID string   `yaml:"group_id" env-default:"notification-service"`
 }
 
-const configPath = "./config/local.yaml"
+type Redis struct {
+	Addr string `yaml:"address" env-default:"localhost:6379"`
+	DB   int    `yaml:"db" env-default:"0"`
+}
+
+const configPath = "./config/prod.yaml"
 
 func MustLoad() *Config {
-	err := godotenv.Load()
-	if err != nil {
-		panic("error loading .env file")
-	}
+	// _ = godotenv.Load()
+	// if err != nil {
+	// 	panic("error loading .env file")
+	// }
 
 	var cfg Config
 	if err := cleanenv.ReadConfig(configPath, &cfg); err != nil {

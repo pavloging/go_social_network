@@ -1,15 +1,15 @@
-env: "local" # local, dev, prod
+env: "prod"
 
 http_server:
-  address: "localhost:8000"
+  address: "0.0.0.0:8000"
   timeout: 4s
   idle_timeout: 60s
 
 kafka:
-  brokers: ["localhost:9092"]
+  brokers: ["kafka:9092"]
   topic: "posts"
   group_id: "notification-service"
 
 redis:
-  address: "localhost:6379"
+  address: "redis:6379"
   db: 0
