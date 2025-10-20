@@ -90,6 +90,8 @@ services:
     build: ./post-service
     env_file:
       - ./post-service/.env
+    environment:
+      - APP_ENV=prod
     ports:
       - "8000:8000"
     networks:

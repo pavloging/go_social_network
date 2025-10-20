@@ -1,11 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
-	// "github.com/joho/godotenv"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -33,22 +35,34 @@ type Redis struct {
 	DB   int    `yaml:"db" env-default:"0"`
 }
 
-const configPath = "./config/prod.yaml"
-
 func MustLoad() *Config {
-	// _ = godotenv.Load()
-	// if err != nil {
-	// 	panic("error loading .env file")
-	// }
+	// Пробуем подгрузить .env, если он есть (в Docker его может не быть)
+	_ = godotenv.Load()
 
+	// Определяем окружение
+	env := os.Getenv("APP_ENV")
+	if env == "" {
+		env = "local"
+	}
+
+	// Путь до yaml
+	configPath := filepath.Join("config", fmt.Sprintf("%s.yaml", env))
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		panic(fmt.Sprintf("config file not found: %s", configPath))
+	}
+
+	// Загружаем конфиг
 	var cfg Config
 	if err := cleanenv.ReadConfig(configPath, &cfg); err != nil {
-		panic("cannot read config " + err.Error())
+		panic("cannot read config: " + err.Error())
 	}
 
+	// Проверяем DATABASE_URL (берем из окружения)
 	if cfg.DatabaseURL = os.Getenv("DATABASE_URL"); cfg.DatabaseURL == "" {
-		panic("error loading DATABASE_URL from environment, please set it in .env file")
+		panic("DATABASE_URL not set in environment")
 	}
 
+	fmt.Printf("✅ Loaded config for environment: %s\n", env)
 	return &cfg
 }
