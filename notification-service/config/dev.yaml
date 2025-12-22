@@ -1,4 +1,4 @@
-env: "prod" # local, dev, prod
+env: "dev" # local, dev, prod
 
 http_server:
   address: "0.0.0.0:8001"

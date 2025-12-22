@@ -72,7 +72,7 @@ services:
     env_file:
       - ./post-service/.env      # Переменные окружения для БД
     ports:
-      - "5433:5432"              # внешний порт 5433 для хоста, внутри контейнера 5432
+      - "5432:5432"              # внешний порт 5433 для хоста, внутри контейнера 5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -91,7 +91,7 @@ services:
     env_file:
       - ./post-service/.env
     environment:
-      - APP_ENV=prod
+      - APP_ENV=dev
     ports:
       - "8000:8000"
     networks:
@@ -111,6 +111,10 @@ services:
 
   notification-service:
     build: ./notification-service
+    env_file:
+      - ./notification-service/.env
+    environment:
+      - APP_ENV=dev
     ports:
       - "8001:8001"
     networks:
