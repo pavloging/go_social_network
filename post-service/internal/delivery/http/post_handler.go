@@ -1,72 +1,107 @@
 package http
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 
 	"log/slog"
 	"post-service/internal/usecase"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/render"
 )
 
 type PostHandler struct {
 	log *slog.Logger
 	uc  *usecase.PostUsecase
-	ctx context.Context
 }
 
-func NewPostHandler(ctx context.Context, log *slog.Logger, uc *usecase.PostUsecase) *PostHandler {
-	return &PostHandler{ctx: ctx, log: log, uc: uc}
+func NewPostHandler(log *slog.Logger, uc *usecase.PostUsecase) *PostHandler {
+	return &PostHandler{log: log, uc: uc}
 }
 
-// GET /posts
+// GET /posts/{id}
 func (h *PostHandler) GetByID(w http.ResponseWriter, r *http.Request) {
-	idParam := chi.URLParam(r, "id") // строковый id из URL
+	const fn = "PostHandler.GetByID"
+
+	log := h.log.With(
+		slog.String("fn", fn),
+		slog.String("request_id", middleware.GetReqID(r.Context())),
+	)
+
+	idParam := chi.URLParam(r, "id")
 	if idParam == "" {
-		http.Error(w, "id is required", http.StatusBadRequest)
+		log.Warn("empty id parameter")
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{
+			"error":   "Bad request",
+			"message": "ID is required",
+		})
 		return
 	}
 
-	h.log.Info("request is valid")
+	log.Info("getting post", slog.String("id", idParam))
 
-	post, err := h.uc.GetByID(h.log, h.ctx, idParam)
+	post, err := h.uc.GetByID(r.Context(), idParam)
 	if err != nil {
-		h.log.Error("failed to get post", "err", err)
-		http.Error(w, "failed to get post", http.StatusInternalServerError)
+		log.Error("failed to get post", slog.Any("error", err))
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, map[string]string{
+			"error":   "Internal server error",
+			"message": "Failed to retrieve post",
+		})
 		return
 	}
 
-	h.log.Info("post is was get to db")
+	if post == nil {
+		log.Warn("post not found", slog.String("id", idParam))
+		render.Status(r, http.StatusNotFound)
+		render.JSON(w, r, map[string]string{
+			"error":   "Not found",
+			"message": "Post not found",
+		})
+		return
+	}
 
-	// отдаём post обратно клиенту
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(post)
+	log.Info("post retrieved", slog.String("id", idParam))
+	render.JSON(w, r, post)
 }
 
 // GET /posts
 func (h *PostHandler) List(w http.ResponseWriter, r *http.Request) {
-	h.log.Info("request is valid")
+	const fn = "PostHandler.List"
 
-	post, err := h.uc.List(h.ctx)
+	log := h.log.With(
+		slog.String("fn", fn),
+		slog.String("request_id", middleware.GetReqID(r.Context())),
+	)
+
+	log.Info("listing posts")
+
+	posts, err := h.uc.List(r.Context())
 	if err != nil {
-		h.log.Error("failed to get posts", "err", err)
-		http.Error(w, "failed to get posts", http.StatusInternalServerError)
+		log.Error("failed to get posts", slog.Any("error", err))
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, map[string]string{
+			"error":   "Internal server error",
+			"message": "Failed to retrieve posts",
+		})
 		return
 	}
 
-	h.log.Info("posts is was get to db")
-
-	// отдаём posts обратно клиенту
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(post)
+	log.Info("posts retrieved", slog.Int("count", len(posts)))
+	render.JSON(w, r, posts)
 }
 
 // POST /posts
 func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
+	const fn = "PostHandler.CreatePost"
+
+	log := h.log.With(
+		slog.String("fn", fn),
+		slog.String("request_id", middleware.GetReqID(r.Context())),
+	)
+
 	var req struct {
 		Title   string   `json:"title"`
 		Author  string   `json:"author"`
@@ -74,24 +109,68 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 		Tags    []string `json:"tags"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+	if err := render.DecodeJSON(r.Body, &req); err != nil {
+		log.Error("failed to decode request", slog.Any("error", err))
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{
+			"error":   "Bad request",
+			"message": "Invalid JSON payload",
+		})
 		return
 	}
 
-	h.log.Info("request is valid")
+	// Валидация
+	if req.Title == "" {
+		log.Warn("empty title in request")
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{
+			"error":   "Validation error",
+			"message": "Title is required",
+		})
+		return
+	}
 
-	post, err := h.uc.CreatePost(h.ctx, req.Title, req.Author, req.Content, req.Tags)
+	if req.Author == "" {
+		log.Warn("empty author in request")
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{
+			"error":   "Validation error",
+			"message": "Author is required",
+		})
+		return
+	}
+
+	if req.Content == "" {
+		log.Warn("empty content in request")
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{
+			"error":   "Validation error",
+			"message": "Content is required",
+		})
+		return
+	}
+
+	log.Info("creating post",
+		slog.String("title", req.Title),
+		slog.String("author", req.Author),
+	)
+
+	post, err := h.uc.CreatePost(r.Context(), req.Title, req.Author, req.Content, req.Tags)
 	if err != nil {
-		h.log.Error("failed to create post", "err", err)
-		http.Error(w, "failed to create post", http.StatusInternalServerError)
+		log.Error("failed to create post", slog.Any("error", err))
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, map[string]string{
+			"error":   "Internal server error",
+			"message": "Failed to create post",
+		})
 		return
 	}
 
-	h.log.Info("message is was send to notification-service")
+	log.Info("post created",
+		slog.String("id", post.ID),
+		slog.String("title", post.Title),
+	)
 
-	// отдаём post обратно клиенту
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(post)
+	render.Status(r, http.StatusCreated)
+	render.JSON(w, r, post)
 }

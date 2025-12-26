@@ -2,7 +2,7 @@ package usecase
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"post-service/internal/domain"
 	"time"
 
@@ -26,33 +26,34 @@ func NewPostUsecase(poolRepo domain.PostRepository, producer domain.EventProduce
 func (u *PostUsecase) List(ctx context.Context) ([]*domain.Post, error) {
 	posts, err := u.repo.List(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list posts: %w", err)
 	}
 
 	return posts, nil
 }
 
-func (u *PostUsecase) GetByID(log *slog.Logger, ctx context.Context, id string) (*domain.Post, error) {
-	// 1. Проверяем кеш
-	post, err := u.cache.GetPost(ctx, id)
-	if err != nil {
-		log.Error("redis get error", slog.Any("err", err))
-	}
+func (u *PostUsecase) GetByID(ctx context.Context, id string) (*domain.Post, error) {
+	// 1. Проверяем кеш (игнорируем ошибку, но логгируем)
+	// Кэш не должен ломать логику приложения
+	post, _ := u.cache.GetPost(ctx, id)
 	if post != nil {
 		return post, nil
 	}
 
 	// 2. Достаём из Postgres
-	post, err = u.repo.GetByID(ctx, id)
+	post, err := u.repo.GetByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get post by id %s: %w", id, err)
 	}
 
-	// 3. Кладём в кеш
-	_ = u.cache.SavePost(ctx, post, 5*time.Minute)
+	// 3. Кладём в кеш (асинхронно, чтобы не блокировать ответ)
+	go func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = u.cache.SavePost(cacheCtx, post, 5*time.Minute)
+	}()
 
 	return post, nil
-
 }
 
 func (u *PostUsecase) CreatePost(ctx context.Context, title, author, content string, tags []string) (*domain.Post, error) {
@@ -67,14 +68,21 @@ func (u *PostUsecase) CreatePost(ctx context.Context, title, author, content str
 
 	// 1. Сохраняем в БД
 	if err := u.repo.Save(ctx, post); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to save post to database: %w", err)
 	}
 
 	// 2. Публикуем событие в Kafka
 	if err := u.producer.Publish(ctx, post); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to publish post to kafka: %w", err)
 	}
 
-	// 3. Возращаем пост
+	// 3. Асинхронно сохраняем в кеш
+	go func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = u.cache.SavePost(cacheCtx, post, 5*time.Minute)
+	}()
+
+	// 3. Возвращаем пост
 	return post, nil
 }

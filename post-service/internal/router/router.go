@@ -30,7 +30,7 @@ func New(
 
 	// Handlers
 	r.Handle("/metrics", promhttp.Handler())
-	postHandler := httpDelivery.NewPostHandler(ctx, log, postUC)
+	postHandler := httpDelivery.NewPostHandler(log, postUC)
 	healthHandler := httpDelivery.NewHealthHandler(log)
 	// commentHandler := httpDelivery.NewCommentHandler(log, commentUC)
 

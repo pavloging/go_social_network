@@ -15,7 +15,7 @@ func NewPostgresPostRepository(pool *pgxpool.Pool) *PostgresPostRepository {
 	return &PostgresPostRepository{pool: pool}
 }
 
-// Прокинуть контекст из usecase
+// Прокидывать контекст из usecase это нормально
 // Это нужно для отмены запросов, таймаутов и т.д.
 // Потому что в текущем виде контекст всегда будет background
 // То есть всегда без отмены и таймаутов

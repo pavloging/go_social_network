@@ -43,11 +43,11 @@ func main() {
 	postRepo := postgres.NewPostgresPostRepository(pool) // Сущность для работы с posts
 
 	// Подключаем Redis (cache)
-	cache := redis.NewRedisCache(cfg.Redis.Addr, cfg.Redis.DB)
+	cache := redis.NewRedisCache(cfg.Redis.Addr, cfg.Redis.DB, log.With(slog.String("component", "redis")))
 
 	var producer *repository.KafkaProducer
 	for i := 0; i < 10; i++ {
-		producer, err = repository.NewKafkaProducer(cfg.Brokers, cfg.Topic)
+		producer, err = repository.NewKafkaProducer(cfg.Brokers, cfg.Topic, log.With(slog.String("component", "kafka")))
 		if err == nil {
 			break
 		}
@@ -61,7 +61,7 @@ func main() {
 	postUC := usecase.NewPostUsecase(postRepo, producer, cache) // Бизнес-логика для posts
 
 	// Передаем ctx в обработчики
-	router := route.New(ctx, log, postUC)
+	router := route.New(ctx, log.With(slog.String("component", "http")), postUC)
 
 	// Settings and started server + Grasful shortdown
 	srv := &http.Server{
