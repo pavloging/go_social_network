@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -13,10 +14,14 @@ import (
 	"github.com/IBM/sarama"
 )
 
+type dlqPublisher interface {
+	Publish(ctx context.Context, event domain.DeadLetterEvent) error
+}
+
 type Consumer struct {
 	log          *slog.Logger
 	uc           *usecase.NotificationUsecase
-	dlq          *DLQProducer
+	dlq          dlqPublisher
 	retryMax     int
 	retryBackoff time.Duration
 }
@@ -65,12 +70,22 @@ func (c *Consumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 
 func (c *Consumer) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for msg := range claim.Messages() {
-		c.handleMessage(sess, msg)
+		if err := c.handleMessage(sess, msg); err != nil {
+			c.log.Error(
+				"failed to handle message, stopping claim",
+				slog.Any("error", err),
+				slog.String("topic", msg.Topic),
+				slog.Int("partition", int(msg.Partition)),
+				slog.Int64("offset", msg.Offset),
+			)
+			return err
+		}
 	}
+
 	return nil
 }
 
-func (c *Consumer) handleMessage(sess sarama.ConsumerGroupSession, msg *sarama.ConsumerMessage) {
+func (c *Consumer) handleMessage(sess sarama.ConsumerGroupSession, msg *sarama.ConsumerMessage) error {
 	raw := msg.Value
 	key := string(msg.Key)
 
@@ -85,10 +100,11 @@ func (c *Consumer) handleMessage(sess sarama.ConsumerGroupSession, msg *sarama.C
 			Attempts:      1,
 			FailedAt:      time.Now().UTC(),
 		}
-		if c.publishDLQAndCommit(sess, msg, dlqEvent) {
-			return
+		if err := c.dlq.Publish(sess.Context(), dlqEvent); err != nil {
+			return fmt.Errorf("publish invalid json message to dlq: %w", err)
 		}
-		return
+		commitMessage(sess, msg)
+		return nil
 	}
 
 	if err := validateEvent(event); err != nil {
@@ -101,10 +117,11 @@ func (c *Consumer) handleMessage(sess sarama.ConsumerGroupSession, msg *sarama.C
 			Attempts:      1,
 			FailedAt:      time.Now().UTC(),
 		}
-		if c.publishDLQAndCommit(sess, msg, dlqEvent) {
-			return
+		if err := c.dlq.Publish(sess.Context(), dlqEvent); err != nil {
+			return fmt.Errorf("publish validation error message to dlq: %w", err)
 		}
-		return
+		commitMessage(sess, msg)
+		return nil
 	}
 
 	if err := c.processWithRetry(sess.Context(), event); err != nil {
@@ -120,21 +137,15 @@ func (c *Consumer) handleMessage(sess sarama.ConsumerGroupSession, msg *sarama.C
 			Attempts:      c.retryMax,
 			FailedAt:      time.Now().UTC(),
 		}
-		c.publishDLQAndCommit(sess, msg, dlqEvent)
-		return
+		if err := c.dlq.Publish(sess.Context(), dlqEvent); err != nil {
+			return fmt.Errorf("publish failed message to dlq: %w", err)
+		}
+		commitMessage(sess, msg)
+		return nil
 	}
 
 	commitMessage(sess, msg)
-}
-
-func (c *Consumer) publishDLQAndCommit(sess sarama.ConsumerGroupSession, msg *sarama.ConsumerMessage, dlqEvent domain.DeadLetterEvent) bool {
-	if err := c.dlq.Publish(sess.Context(), dlqEvent); err != nil {
-		c.log.Error("failed to publish DLQ message", slog.Any("error", err))
-		return false
-	}
-
-	commitMessage(sess, msg)
-	return true
+	return nil
 }
 
 func (c *Consumer) processWithRetry(ctx context.Context, event domain.EventEnvelope) error {

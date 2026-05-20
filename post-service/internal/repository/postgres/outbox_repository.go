@@ -121,6 +121,11 @@ func (r *PostgresOutboxRepository) MarkFailedAttempt(
 	maxAttempts int,
 	retryDelay time.Duration,
 ) error {
+	retryDelaySeconds := int(retryDelay.Seconds())
+	if retryDelaySeconds <= 0 {
+		retryDelaySeconds = 1
+	}
+
 	_, err := r.pool.Exec(ctx, `
 UPDATE outbox_events
 SET
@@ -132,13 +137,13 @@ SET
     END,
     next_attempt_at = CASE
         WHEN attempts + 1 >= $3 THEN NOW()
-        ELSE NOW() + ($4::text)::interval
+        ELSE NOW() + ($4::int * interval '1 second')
     END,
     locked_at = NULL,
     locked_by = NULL,
     updated_at = NOW()
 WHERE id = $1`,
-		id, errText, maxAttempts, retryDelay.String())
+		id, errText, maxAttempts, retryDelaySeconds)
 	if err != nil {
 		return fmt.Errorf("mark failed attempt: %w", err)
 	}

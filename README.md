@@ -1,130 +1,6 @@
 # Проект: Post & Notification System
 
-## ⚙️ Как запустить (Docker, Version 2)
-
-```bash
-docker-compose up -d --build
-```
-
-Сервисы поднимаются с dev-конфигурацией из `docker-compose.yml` — отдельный `.env` не обязателен.
-
-Отправьте POST-запрос:
-```json
-	{
-		"title": "Hi",
-		"author": "Jorsh",
-		"content": "Hi, my name is Jorsh, i am is student and i created this service. Are you stay?",
-		"tags": ["test"]
-	}
-```
-6. Проверьте логи notification-service и Redis (см. раздел Version 2 ниже).
-
-Для локального запуска без Docker скопируйте `.env.example` в `.env` в каждом сервисе.
-
-## 🎯 Идея
-- **post-service**: создает посты вручную или автоматически (например, генерация текста, случайные пользователи, теги) и публикует события в Kafka.  
-- **notification-service**: подписан на Kafka, принимает события, фильтрует их, сохраняет посты в Redis и генерирует уведомления по ключевым событиям.  
-
-Цель — полностью event-driven процесс: нет множества REST-запросов, все происходит через Kafka.
-
----
-
-## ⚙️ Архитектура (микросервисы)
-
-```less
-    [post-service]
-        │
-        ▼
-    Kafka (topic: posts)
-        │
-        ▼
-[notification-service] → Redis (кэш постов / уведомлений)
-│
-├── Prometheus (метрики)
-│
-└── Promtail → Loki (логи)
-```
-
----
-
-### Post Service
-- REST API (POST /posts)
-- сохраняет пост в базу (может быть PostgreSQL)
-- публикует событие в Kafka (topic=posts)
-
-Тестирование:
-```bash
-cd post-service
-golangci-lint run ./...
-```
-
-### Kafka
-- наш Event Bus (message broker)
-- хранит и доставляет сообщения (посты)
-- гарантирует, что Notification Service получит событие
-
-### Notification Service
-- подписан на topic=posts
-- получает сообщение → парсит его → делает "уведомление" (в минимальной версии просто пишет в логи)
-- в будущем: может слать email, пуши, сохранять в БД
-
-### 📌 Зачем Kafka
-- 🔹 Развязывает сервисы (Post не зависит от Notification)
-- 🔹 Гарантированная доставка сообщений
-- 🔹 Легко добавлять новые подписчики (например, Analytics Service)
-- 🔹 Масштабируемость
-
-## 📦 Подробнее про реализацию сервисов
-
-### 1️⃣ Post-Service
-- Генерация постов:
-  - автор, текст, теги, timestamp
-  - можно использовать `faker` или random генерацию  
-- Публикация в Kafka (`posts`)  
-
-**Пример события:**
-```json
-{
-  "id": "post_12345",
-  "author": "user_42",
-  "content": "Kafka makes event-driven fun!",
-  "tags": ["kafka", "golang"],
-  "created_at": "2025-08-17T12:00:00Z"
-}
-```
-
-### 2️⃣ Notification-Service
-- Подписан на топик posts
-- Фильтрует посты по ключевым словам (error, alert)
-- Сохраняет последние посты в Redis (например, последние 100)
-- Генерирует уведомления (stdout, Redis queue или топик posts.alerts)
-- Экспонирует метрики для Prometheus:
-    - posts_total
-    - alerts_total
-    - posts_per_second
-
-**Логи для Loki через Promtail:**
-
-- "Generated post id=post_12345 by user_42"
-- "ALERT: Post post_12345 contains keyword 'error'"
-
----
-
-### 📊 Kafka топики
-posts — все новые посты
-
-posts.alerts — уведомления/алерты
-
----
-
-### 🚀 Возможные расширения
-Analytics-Service: подсчёт топ-авторов, топ-ключевых слов, частоты тегов
-
-Отложенные уведомления: TTL в Redis
-
-Kafka Streams: агрегирование событий и расчёт метрик в реальном времени
-
-Auto-scaling consumers: демонстрация управления потребителями Kafka
+Event-driven система из двух микросервисов: **post-service** (REST + outbox) и **notification-service** (Kafka consumer + Redis).
 
 ---
 
@@ -132,38 +8,77 @@ Auto-scaling consumers: демонстрация управления потре
 
 ### Что добавлено
 
-- **EventEnvelope** вместо голого `Post` в Kafka
+- **EventEnvelope** — единый формат события в Kafka
 - **Transactional Outbox** в post-service (таблица `outbox_events`)
-- **Outbox worker** — асинхронная публикация в Kafka
-- Kafka topics: `posts`, `posts.dlq`
-- **Manual commit** offsets в notification-service
+- **Outbox Worker** — асинхронная публикация в Kafka
+- Kafka topic **posts**
+- Kafka topic **posts.dlq** (dead letter queue)
+- **Manual offset commit** в notification-service
 - **Retry** обработки при временных ошибках Redis
-- **DLQ** для невалидных/необрабатываемых сообщений
-- **Идемпотентность** через Redis `processed_events:<event_id>`
-- Список уведомлений в Redis `notifications` (последние 100)
+- **DLQ** для невалидных и необрабатываемых сообщений
+- **Idempotency** через Redis `processed_events:<event_id>`
+- Список уведомлений в Redis **`notifications`** (последние 100)
 
 ### Поток данных
 
 ```
 POST /posts
-  → post + outbox_event (одна транзакция Postgres)
-  → outbox worker → Kafka topic posts (EventEnvelope)
-  → notification-service
-      → validate envelope
-      → idempotency check (processed_events)
-      → save notification in Redis
-      → manual commit offset
+  → post-service создаёт Post
+  → post-service создаёт EventEnvelope
+  → post-service сохраняет post + outbox_event в одной транзакции (Postgres)
+  → outbox worker забирает pending event
+  → outbox worker публикует EventEnvelope в Kafka topic posts
+  → notification-service читает topic posts
+  → notification-service валидирует EventEnvelope
+  → notification-service делает retry при временных ошибках
+  → notification-service сохраняет notification в Redis list notifications
+  → notification-service сохраняет processed_events:<event_id>
+  → notification-service вручную commit offset
+  → плохие сообщения уходят в posts.dlq (commit только после успешной публикации в DLQ)
 ```
 
-### Запуск
+**Важно:** `CreatePost` **не** публикует в Kafka напрямую. Публикация только через outbox worker.
+
+### Архитектура
+
+```less
+[post-service]
+  │ REST POST /posts
+  ▼
+Postgres (posts + outbox_events)
+  │
+  │ outbox worker
+  ▼
+Kafka (topic: posts)
+  │
+  ▼
+[notification-service]
+  │ validate → retry → idempotency
+  ▼
+Redis (notifications, processed_events:*)
+  │
+  │ invalid / max retry
+  ▼
+Kafka (topic: posts.dlq)
+```
+
+---
+
+## Как запустить
 
 ```bash
 docker-compose up -d --build
 ```
 
+Сервисы поднимаются с dev-конфигурацией из `docker-compose.yml` — отдельный `.env` не обязателен.
+
+Для локального запуска без Docker скопируйте `.env.example` в `.env` в каждом сервисе.
+
 Kafka UI: http://localhost:8080
 
-### Создать пост
+---
+
+## Как создать пост
 
 ```bash
 curl -X POST http://localhost:8000/posts \
@@ -176,48 +91,75 @@ curl -X POST http://localhost:8000/posts \
   }'
 ```
 
-### Логи
+---
 
-```bash
-docker-compose logs -f post-service
-docker-compose logs -f notification-service
-```
-
-### Redis: notifications
-
-```bash
-docker-compose exec redis redis-cli LRANGE notifications 0 10
-```
-
-### Redis: processed events
-
-```bash
-docker-compose exec redis redis-cli KEYS "processed_events:*"
-```
-
-### Outbox в Postgres
+## Как проверить outbox
 
 ```bash
 docker-compose exec postgres psql -U postgres -d postgres -c \
   "SELECT id, event_type, status, attempts, next_attempt_at, last_error FROM outbox_events ORDER BY created_at DESC LIMIT 10;"
 ```
 
-### Проверка retry и DLQ
+Ожидаемо: после публикации worker'ом статус `published`.
 
-1. Остановить Redis: `docker-compose stop redis`
-2. Создать пост через `curl` (см. выше)
-3. Смотреть retry в логах notification-service
-4. После max attempts сообщение попадёт в topic `posts.dlq` (Kafka UI)
+---
 
-### Проверка DLQ для невалидного JSON
+## Как проверить Redis notifications
 
-Отправьте невалидное сообщение в topic `posts` через Kafka UI и проверьте topic `posts.dlq`.
+```bash
+docker-compose exec redis redis-cli LRANGE notifications 0 10
+```
 
-### Тесты
+---
+
+## Как проверить processed events
+
+```bash
+docker-compose exec redis redis-cli KEYS "processed_events:*"
+```
+
+---
+
+## Как смотреть логи
+
+```bash
+docker-compose logs -f post-service
+docker-compose logs -f notification-service
+```
+
+---
+
+## Как проверить DLQ
+
+1. Откройте Kafka UI: http://localhost:8080
+2. Отправьте **невалидное** сообщение в topic `posts` (например, plain text или битый JSON)
+3. Убедитесь, что notification-service **не падает** (при ошибке DLQ consumer останавливает claim и перечитывает сообщение)
+4. После успешной отправки в DLQ проверьте topic **`posts.dlq`**
+
+---
+
+## Как проверить retry
+
+1. Остановите Redis: `docker-compose stop redis`
+2. Создайте пост через `curl` (см. выше)
+3. Смотрите логи notification-service — должны быть retry
+4. После max attempts сообщение должно попасть в **`posts.dlq`**
+5. Запустите Redis обратно: `docker-compose start redis`
+
+---
+
+## Тесты
 
 ```bash
 cd post-service && go test ./...
 cd notification-service && go test ./...
+```
+
+### post-service
+
+```bash
+cd post-service
+golangci-lint run ./...
 ```
 
 ### Нагрузочный тест (опционально)
@@ -225,6 +167,42 @@ cd notification-service && go test ./...
 ```bash
 docker-compose --profile loadtest up bombardier
 ```
+
+---
+
+## Мониторинг
+
+В `docker-compose` также подняты **Prometheus** и **Grafana** (порты 9090 и 3000). Конфигурация Prometheus не менялась под Version 2.
+
+---
+
+## Пример EventEnvelope в Kafka
+
+```json
+{
+  "event_id": "uuid",
+  "event_type": "post.created",
+  "version": 1,
+  "occurred_at": "2025-08-17T12:00:00Z",
+  "payload": {
+    "id": "post-uuid",
+    "title": "Kafka reliability",
+    "author": "student",
+    "content": "Testing reliable delivery",
+    "tags": ["go", "kafka"],
+    "created_at": "2025-08-17T12:00:00Z"
+  }
+}
+```
+
+---
+
+### 🚀 Возможные расширения
+
+- Analytics-Service: подсчёт топ-авторов, топ-ключевых слов, частоты тегов
+- Отложенные уведомления: TTL в Redis
+- Kafka Streams: агрегирование событий и расчёт метрик в реальном времени
+- Auto-scaling consumers
 
 <!--
 TODO Добавить описание для версии 3
