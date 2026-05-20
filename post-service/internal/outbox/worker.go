@@ -51,7 +51,10 @@ func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
 
-	w.log.Info("outbox worker started", slog.String("worker_id", w.workerID))
+	w.log.Info("outbox worker started",
+		slog.String("worker_id", w.workerID),
+		slog.Duration("retry_delay", w.retryDelay),
+		slog.Int("max_attempts_diag", w.maxAttempts))
 
 	for {
 		select {
@@ -65,7 +68,7 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) processBatch(ctx context.Context) {
-	events, err := w.repo.ClaimPending(ctx, w.workerID, w.batchSize, w.maxAttempts)
+	events, err := w.repo.ClaimPending(ctx, w.workerID, w.batchSize)
 	if err != nil {
 		w.log.Error("failed to claim pending outbox events",
 			slog.String("worker_id", w.workerID),
@@ -81,16 +84,19 @@ func (w *Worker) processBatch(ctx context.Context) {
 		w.log.Info("publishing outbox event",
 			slog.String("worker_id", w.workerID),
 			slog.String("event_id", event.ID),
-			slog.String("event_type", event.EventType))
+			slog.String("event_type", event.EventType),
+			slog.Int("attempts", event.Attempts))
 
 		if err := w.producer.PublishEvent(ctx, event.Payload); err != nil {
-			w.log.Error("failed to publish outbox event",
+			w.log.Warn("outbox event publish failed, will retry",
 				slog.String("worker_id", w.workerID),
 				slog.String("event_id", event.ID),
+				slog.Int("attempts", event.Attempts),
+				slog.Duration("retry_delay", w.retryDelay),
 				slog.Any("error", err))
 
-			if markErr := w.repo.MarkFailedAttempt(ctx, event.ID, err.Error(), w.maxAttempts, w.retryDelay); markErr != nil {
-				w.log.Error("failed to mark outbox event as failed attempt",
+			if markErr := w.repo.MarkRetryableFailure(ctx, event.ID, err.Error(), w.retryDelay); markErr != nil {
+				w.log.Error("failed to schedule outbox event retry",
 					slog.String("worker_id", w.workerID),
 					slog.String("event_id", event.ID),
 					slog.Any("error", markErr))

@@ -8,7 +8,9 @@ const (
 	OutboxStatusPending    OutboxStatus = "pending"
 	OutboxStatusProcessing OutboxStatus = "processing"
 	OutboxStatusPublished  OutboxStatus = "published"
-	OutboxStatusFailed     OutboxStatus = "failed"
+	// OutboxStatusFailed is reserved for future non-recoverable outbox errors.
+	// Temporary Kafka publish errors keep the event in pending and retry until published.
+	OutboxStatusFailed OutboxStatus = "failed"
 )
 
 type OutboxEvent struct {

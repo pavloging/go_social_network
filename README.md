@@ -102,6 +102,65 @@ docker-compose exec postgres psql -U postgres -d postgres -c \
 
 Ожидаемо: после публикации worker'ом статус `published`.
 
+### Outbox retry при недоступной Kafka
+
+При временной недоступности Kafka post-service всё равно сохраняет `post` и `outbox_event`. Ошибка публикации в Kafka **не** переводит событие в terminal `failed`:
+
+- `attempts` увеличивается (может расти выше `OUTBOX_MAX_ATTEMPTS` — параметр только для диагностики в логах);
+- `last_error` хранит последнюю ошибку Kafka;
+- `status` возвращается в `pending`;
+- `next_attempt_at` задаёт паузу перед следующей попыткой;
+- outbox worker повторяет публикацию до успеха;
+- после восстановления Kafka событие становится `published`.
+
+`status='failed'` зарезервирован для будущих невосстановимых ошибок outbox (не используется для временных ошибок Kafka в Version 2).
+
+### Проверка Kafka down / outbox retry
+
+1. Остановить Kafka:
+
+```bash
+docker-compose stop kafka
+```
+
+2. Создать пост:
+
+```bash
+curl -X POST http://localhost:8000/posts \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Kafka down test","author":"student","content":"Outbox should keep event","tags":["outbox"]}'
+```
+
+3. Проверить outbox:
+
+```bash
+docker-compose exec postgres psql -U postgres -d postgres -c \
+  "SELECT id, event_type, status, attempts, last_error FROM outbox_events ORDER BY created_at DESC LIMIT 5;"
+```
+
+Ожидаемо:
+
+- event есть;
+- `status` = `pending` или `processing` (не terminal `failed`);
+- `attempts` растёт при повторных попытках worker;
+- `last_error` содержит ошибку Kafka.
+
+4. Запустить Kafka:
+
+```bash
+docker-compose start kafka
+docker-compose start kafka-init
+```
+
+5. Подождать 10–30 секунд и проверить снова:
+
+```bash
+docker-compose exec postgres psql -U postgres -d postgres -c \
+  "SELECT id, event_type, status, attempts, last_error FROM outbox_events ORDER BY created_at DESC LIMIT 5;"
+```
+
+Ожидаемо: `status = published`.
+
 ---
 
 ## Как проверить Redis notifications

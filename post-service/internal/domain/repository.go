@@ -14,9 +14,10 @@ type PostRepository interface {
 }
 
 type OutboxRepository interface {
-	ClaimPending(ctx context.Context, workerID string, limit int, maxAttempts int) ([]*OutboxEvent, error)
+	ClaimPending(ctx context.Context, workerID string, limit int) ([]*OutboxEvent, error)
 	MarkPublished(ctx context.Context, id string) error
-	MarkFailedAttempt(ctx context.Context, id string, errText string, maxAttempts int, retryDelay time.Duration) error
+	// MarkRetryableFailure schedules another publish attempt after a temporary Kafka error.
+	MarkRetryableFailure(ctx context.Context, id string, errText string, retryDelay time.Duration) error
 }
 
 type CacheRepository interface {

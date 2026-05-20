@@ -23,7 +23,6 @@ func (r *PostgresOutboxRepository) ClaimPending(
 	ctx context.Context,
 	workerID string,
 	limit int,
-	maxAttempts int,
 ) ([]*domain.OutboxEvent, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -37,7 +36,6 @@ WITH picked AS (
     FROM outbox_events
     WHERE
         status IN ('pending', 'processing')
-        AND attempts < $1
         AND next_attempt_at <= NOW()
         AND (
             status = 'pending'
@@ -47,13 +45,13 @@ WITH picked AS (
             )
         )
     ORDER BY created_at
-    LIMIT $2
+    LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
 UPDATE outbox_events oe
 SET
     status = 'processing',
-    locked_by = $3,
+    locked_by = $2,
     locked_at = NOW(),
     updated_at = NOW()
 FROM picked
@@ -71,7 +69,7 @@ RETURNING
     oe.updated_at,
     oe.published_at,
     oe.last_error`,
-		maxAttempts, limit, workerID)
+		limit, workerID)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending events: %w", err)
 	}
@@ -114,11 +112,10 @@ WHERE id = $1`, id)
 	return nil
 }
 
-func (r *PostgresOutboxRepository) MarkFailedAttempt(
+func (r *PostgresOutboxRepository) MarkRetryableFailure(
 	ctx context.Context,
 	id string,
 	errText string,
-	maxAttempts int,
 	retryDelay time.Duration,
 ) error {
 	retryDelaySeconds := int(retryDelay.Seconds())
@@ -131,21 +128,15 @@ UPDATE outbox_events
 SET
     attempts = attempts + 1,
     last_error = $2,
-    status = CASE
-        WHEN attempts + 1 >= $3 THEN 'failed'
-        ELSE 'pending'
-    END,
-    next_attempt_at = CASE
-        WHEN attempts + 1 >= $3 THEN NOW()
-        ELSE NOW() + ($4::int * interval '1 second')
-    END,
+    status = 'pending',
+    next_attempt_at = NOW() + ($3::int * interval '1 second'),
     locked_at = NULL,
     locked_by = NULL,
     updated_at = NOW()
 WHERE id = $1`,
-		id, errText, maxAttempts, retryDelaySeconds)
+		id, errText, retryDelaySeconds)
 	if err != nil {
-		return fmt.Errorf("mark failed attempt: %w", err)
+		return fmt.Errorf("mark retryable failure: %w", err)
 	}
 	return nil
 }
