@@ -1,11 +1,18 @@
-env: "dev" # local, dev, prod
-
-http_server:
-  address: "0.0.0.0:8001"
-  timeout: 4s
-  idle_timeout: 60s
+env: dev
 
 kafka:
-  brokers: ["kafka:9092"]
-  topic: "posts"
-  group_id: "notification-service"
+  brokers:
+    - kafka:9092
+  topic: posts
+  dlq_topic: posts.dlq
+  group_id: notification-service
+
+redis:
+  address: redis:6379
+  password: ""
+  db: 0
+  processed_ttl: 168h
+
+retry:
+  max_attempts: 3
+  backoff: 1s

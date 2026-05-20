@@ -112,3 +112,10 @@ func (c *Cache) GetPost(ctx context.Context, id string) (*domain.Post, error) {
 		slog.Int("data_size", len(data)))
 	return &post, nil
 }
+
+func (c *Cache) Close() error {
+	if c.client != nil {
+		return c.client.Close()
+	}
+	return nil
+}

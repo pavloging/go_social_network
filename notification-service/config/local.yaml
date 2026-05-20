@@ -1,11 +1,18 @@
-env: "local" # local, dev, prod
-
-http_server:
-  address: "localhost:8001"
-  timeout: 4s
-  idle_timeout: 60s
+env: local
 
 kafka:
-  brokers: ["localhost:9092"]
-  topic: "posts"
-  group_id: "notification-service"
+  brokers:
+    - localhost:9092
+  topic: posts
+  dlq_topic: posts.dlq
+  group_id: notification-service
+
+redis:
+  address: localhost:6379
+  password: ""
+  db: 0
+  processed_ttl: 168h
+
+retry:
+  max_attempts: 3
+  backoff: 1s

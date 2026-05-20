@@ -13,3 +13,9 @@ kafka:
 redis:
   address: "redis:6379"
   db: 0
+
+outbox:
+  poll_interval: 1s
+  retry_delay: 5s
+  max_attempts: 5
+  batch_size: 10

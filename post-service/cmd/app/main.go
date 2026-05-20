@@ -10,44 +10,43 @@ import (
 	"syscall"
 	"time"
 
-	repository "post-service/internal/repository/kafka"
+	kafkarepo "post-service/internal/repository/kafka"
 	"post-service/internal/repository/postgres"
-	"post-service/internal/repository/redis"
+	redisrepo "post-service/internal/repository/redis"
 	route "post-service/internal/router"
 
 	"post-service/internal/config"
 	"post-service/internal/lib/logger"
+	"post-service/internal/outbox"
 	"post-service/internal/usecase"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
-	ctx := context.Background()
+	appCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Configurate system
 	cfg := config.MustLoad()
 
-	// Settings logger
 	log := logger.SetupLogger(cfg.Env)
 	log.Info("starting the project...", slog.String("env", cfg.Env))
 
-	// Подключаемся к БД
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Error("failed to connect to db:", slog.Any("err", err))
+		os.Exit(1)
 	}
-	defer pool.Close() // закрываем при завершении приложения
 
-	// Репозиторий для Postgres
-	postRepo := postgres.NewPostgresPostRepository(pool) // Сущность для работы с posts
+	postRepo := postgres.NewPostgresPostRepository(pool)
+	outboxRepo := postgres.NewPostgresOutboxRepository(pool)
 
-	// Подключаем Redis (cache)
-	cache := redis.NewRedisCache(cfg.Redis.Addr, cfg.Redis.DB, log.With(slog.String("component", "redis")))
+	cache := redisrepo.NewRedisCache(cfg.Redis.Addr, cfg.Redis.DB, log.With(slog.String("component", "redis")))
 
-	var producer *repository.KafkaProducer
+	var producer *kafkarepo.KafkaProducer
 	for i := 0; i < 10; i++ {
-		producer, err = repository.NewKafkaProducer(cfg.Brokers, cfg.Topic, log.With(slog.String("component", "kafka")))
+		producer, err = kafkarepo.NewKafkaProducer(cfg.Kafka.Brokers, cfg.Kafka.Topic, log.With(slog.String("component", "kafka")))
 		if err == nil {
 			break
 		}
@@ -56,14 +55,27 @@ func main() {
 	}
 	if producer == nil {
 		log.Error("cannot connect to Kafka after retries", slog.Any("err", err))
+		os.Exit(1)
 	}
 
-	postUC := usecase.NewPostUsecase(postRepo, producer, cache) // Бизнес-логика для posts
+	postUC := usecase.NewPostUsecase(postRepo, cache, log.With(slog.String("component", "usecase")))
 
-	// Передаем ctx в обработчики
-	router := route.New(ctx, log.With(slog.String("component", "http")), postUC)
+	workerID := uuid.NewString()
+	outboxWorker := outbox.NewWorker(
+		outboxRepo,
+		producer,
+		log.With(slog.String("component", "outbox-worker")),
+		cfg.Outbox.PollInterval,
+		cfg.Outbox.RetryDelay,
+		cfg.Outbox.MaxAttempts,
+		cfg.Outbox.BatchSize,
+		workerID,
+	)
 
-	// Settings and started server + Grasful shortdown
+	go outboxWorker.Run(appCtx)
+
+	router := route.New(appCtx, log.With(slog.String("component", "http")), postUC)
+
 	srv := &http.Server{
 		Addr:         cfg.Address,
 		ReadTimeout:  cfg.Timeout,
@@ -82,19 +94,30 @@ func main() {
 			log.Error("server failed to start", slog.Any("error", err))
 			os.Exit(1)
 		}
-		log.Info("server stopped listening") // Когда выйдет из ListenAndServe
+		log.Info("server stopped listening")
 	}()
 
 	<-done
 	log.Info("server stopping...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("server forced to shutdown", slog.Any("error", err))
-		os.Exit(1)
 	}
+
+	if err := producer.Close(); err != nil {
+		log.Error("failed to close kafka producer", slog.Any("error", err))
+	}
+
+	if err := cache.Close(); err != nil {
+		log.Error("failed to close redis cache", slog.Any("error", err))
+	}
+
+	pool.Close()
 
 	log.Info("server stopped gracefully")
 }

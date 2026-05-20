@@ -21,6 +21,9 @@ type KafkaProducer struct {
 func NewKafkaProducer(brokers []string, topic string, log *slog.Logger) (*KafkaProducer, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Retry.Max = 5
+	config.Producer.Retry.Backoff = time.Second
 
 	start := time.Now()
 	producer, err := sarama.NewSyncProducer(brokers, config)
@@ -44,7 +47,9 @@ func NewKafkaProducer(brokers []string, topic string, log *slog.Logger) (*KafkaP
 	}, nil
 }
 
-func (k *KafkaProducer) Publish(ctx context.Context, post *domain.Post) error {
+func (k *KafkaProducer) PublishEvent(ctx context.Context, event domain.EventEnvelope) error {
+	_ = ctx
+
 	if k == nil || k.Producer == nil {
 		err := errors.New("kafka producer not initialized")
 		k.log.Error("Kafka producer not initialized")
@@ -53,24 +58,31 @@ func (k *KafkaProducer) Publish(ctx context.Context, post *domain.Post) error {
 
 	start := time.Now()
 
-	msgBytes, err := json.Marshal(post)
+	msgBytes, err := json.Marshal(event)
 	if err != nil {
-		k.log.Error("Failed to marshal post for Kafka",
-			slog.String("post_id", post.ID),
+		k.log.Error("Failed to marshal event envelope for Kafka",
+			slog.String("event_id", event.EventID),
+			slog.String("post_id", event.Payload.ID),
 			slog.String("error", err.Error()))
 		return err
+	}
+
+	key := event.Payload.ID
+	if key == "" {
+		key = event.EventID
 	}
 
 	msg := &sarama.ProducerMessage{
 		Topic: k.Topic,
 		Value: sarama.ByteEncoder(msgBytes),
-		Key:   sarama.StringEncoder(post.ID),
+		Key:   sarama.StringEncoder(key),
 	}
 
 	partition, offset, err := k.Producer.SendMessage(msg)
 	if err != nil {
 		k.log.Error("Failed to publish message to Kafka",
-			slog.String("post_id", post.ID),
+			slog.String("event_id", event.EventID),
+			slog.String("post_id", event.Payload.ID),
 			slog.String("topic", k.Topic),
 			slog.String("error", err.Error()),
 			slog.Duration("duration", time.Since(start)))
@@ -78,7 +90,8 @@ func (k *KafkaProducer) Publish(ctx context.Context, post *domain.Post) error {
 	}
 
 	k.log.Info("Message published to Kafka",
-		slog.String("post_id", post.ID),
+		slog.String("event_id", event.EventID),
+		slog.String("post_id", event.Payload.ID),
 		slog.String("topic", k.Topic),
 		slog.Int("partition", int(partition)),
 		slog.Int64("offset", offset),

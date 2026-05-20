@@ -24,7 +24,7 @@ FROM alpine:3.20.3
 WORKDIR /root/
 
 # Устанавливаем сертификаты (нужны для работы HTTP-клиентов)
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates curl
 
 COPY --from=builder /app/post-service .
 # Бинарник который умеет выполнять миграции

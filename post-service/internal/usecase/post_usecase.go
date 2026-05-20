@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"post-service/internal/domain"
 	"time"
 
@@ -10,16 +11,16 @@ import (
 )
 
 type PostUsecase struct {
-	repo     domain.PostRepository  // db - postgres
-	producer domain.EventProducer   // kafka
-	cache    domain.CacheRepository // redis
+	repo  domain.PostRepository
+	cache domain.CacheRepository
+	log   *slog.Logger
 }
 
-func NewPostUsecase(poolRepo domain.PostRepository, producer domain.EventProducer, cache domain.CacheRepository) *PostUsecase {
+func NewPostUsecase(postRepo domain.PostRepository, cache domain.CacheRepository, log *slog.Logger) *PostUsecase {
 	return &PostUsecase{
-		repo:     poolRepo,
-		producer: producer,
-		cache:    cache,
+		repo:  postRepo,
+		cache: cache,
+		log:   log,
 	}
 }
 
@@ -33,20 +34,16 @@ func (u *PostUsecase) List(ctx context.Context) ([]*domain.Post, error) {
 }
 
 func (u *PostUsecase) GetByID(ctx context.Context, id string) (*domain.Post, error) {
-	// 1. Проверяем кеш (игнорируем ошибку, но логгируем)
-	// Кэш не должен ломать логику приложения
 	post, _ := u.cache.GetPost(ctx, id)
 	if post != nil {
 		return post, nil
 	}
 
-	// 2. Достаём из Postgres
 	post, err := u.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get post by id %s: %w", id, err)
 	}
 
-	// 3. Кладём в кеш (асинхронно, чтобы не блокировать ответ)
 	go func() {
 		cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -63,26 +60,34 @@ func (u *PostUsecase) CreatePost(ctx context.Context, title, author, content str
 		Author:    author,
 		Content:   content,
 		Tags:      tags,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().UTC(),
 	}
 
-	// 1. Сохраняем в БД
-	if err := u.repo.Save(ctx, post); err != nil {
-		return nil, fmt.Errorf("failed to save post to database: %w", err)
+	event := domain.EventEnvelope{
+		EventID:    uuid.NewString(),
+		EventType:  domain.EventTypePostCreated,
+		Version:    domain.EventVersion,
+		OccurredAt: time.Now().UTC(),
+		Payload:    *post,
 	}
 
-	// 2. Публикуем событие в Kafka
-	if err := u.producer.Publish(ctx, post); err != nil {
-		return nil, fmt.Errorf("failed to publish post to kafka: %w", err)
+	if err := u.repo.SaveWithOutbox(ctx, post, event); err != nil {
+		return nil, fmt.Errorf("failed to save post with outbox event: %w", err)
 	}
 
-	// 3. Асинхронно сохраняем в кеш
+	u.log.Info("post created",
+		slog.String("post_id", post.ID),
+		slog.String("title", post.Title),
+		slog.String("author", post.Author))
+	u.log.Info("outbox event created",
+		slog.String("event_id", event.EventID),
+		slog.String("post_id", post.ID))
+
 	go func() {
 		cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = u.cache.SavePost(cacheCtx, post, 5*time.Minute)
 	}()
 
-	// 3. Возвращаем пост
 	return post, nil
 }

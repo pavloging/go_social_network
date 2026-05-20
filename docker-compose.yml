@@ -6,7 +6,12 @@ services:
       - "6379:6379"
     networks:
       - monitoring
-      
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   kafka:
     image: wurstmeister/kafka:latest
     container_name: kafka
@@ -23,7 +28,8 @@ services:
     networks:
       - monitoring
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "netstat -tln | grep 9092 || exit 1"]
       interval: 5s
@@ -43,42 +49,82 @@ services:
       timeout: 5s
       retries: 5
 
+  kafka-init:
+    image: wurstmeister/kafka:latest
+    container_name: kafka-init
+    networks:
+      - monitoring
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      sh -c "
+        kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic posts --partitions 1 --replication-factor 1 &&
+        kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic posts.dlq --partitions 1 --replication-factor 1 &&
+        kafka-topics.sh --bootstrap-server kafka:9092 --list
+      "
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks:
+      - monitoring
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   postgres:
     image: postgres:16
     container_name: postgres
-    env_file:
-      - ./post-service/.env      # Переменные окружения для БД
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
     ports:
-      - "5432:5432"              # внешний порт 5433 для хоста, внутри контейнера 5432
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - monitoring
-    depends_on:
-      - kafka
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 3s
-      # Сколько раз Docker попытается выполнить тест, прежде чем считать контейнер unhealthy
       retries: 5
 
   post-service:
     build: ./post-service
-    env_file:
-      - ./post-service/.env
+    container_name: post-service
     environment:
-      - APP_ENV=dev
+      APP_ENV: dev
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_POSTS_TOPIC: posts
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_RETRY_DELAY: 5s
+      OUTBOX_MAX_ATTEMPTS: 5
+      OUTBOX_BATCH_SIZE: 10
     ports:
       - "8000:8000"
     networks:
       - monitoring
     command: ["sh", "-c", "./migrator --migrations-path ./migrations && ./post-service"]
     depends_on:
-      postgres: # Ждем пока health у postgres будет пройден
+      postgres:
         condition: service_healthy
-      kafka: # Ждем пока health у kafka будет пройден
+      redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -88,17 +134,28 @@ services:
 
   notification-service:
     build: ./notification-service
-    env_file:
-      - ./notification-service/.env
+    container_name: notification-service
     environment:
-      - APP_ENV=dev
-    ports:
-      - "8001:8001"
+      APP_ENV: dev
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_POSTS_TOPIC: posts
+      KAFKA_DLQ_TOPIC: posts.dlq
+      KAFKA_CONSUMER_GROUP: notification-service
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      PROCESSED_EVENTS_TTL: 168h
+      MAX_RETRY_ATTEMPTS: 3
+      RETRY_BACKOFF: 1s
     networks:
       - monitoring
     depends_on:
-      kafka: # Ждем пока health у kafka будет пройден
+      redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
 
   prometheus:
     image: prom/prometheus:latest
@@ -118,8 +175,9 @@ services:
     networks:
       - monitoring
 
-# Лучше убрать из билда и запускать в ручную, так как после запуска у нас остаються тестовые данные
   bombardier:
+    profiles:
+      - loadtest
     image: alpine/bombardier
     command: [
       "-c", "100",
@@ -132,7 +190,7 @@ services:
     networks:
       - monitoring
     depends_on:
-      - post-service  
+      - post-service
 
 volumes:
   postgres_data:
